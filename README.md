@@ -19,7 +19,8 @@
 <hr>
 
 ```bash
-g++ ppm_writer.cpp frame_sink.cpp image.cpp file_sink.cpp udp_cam_libcamera_gst.cpp -o udp_cam_libcamera_gst -g  $(pkg-config --cflags --libs libcamera gstreamer-1.0 gstreamer-app-1.0)  -pthread -I./
+cd src
+g++ image.cpp file_sink.cpp udp_cam_libcamera_gst.cpp -o udp_cam_libcamera_gst -g  $(pkg-config --cflags --libs libcamera gstreamer-1.0 gstreamer-app-1.0)  -pthread -I./
 ```
 
 # Run
