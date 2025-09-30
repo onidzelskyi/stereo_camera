@@ -50,32 +50,15 @@ static GstElement *pipeline;
 #define FPS 30
 const uint8_t *data_ptr = nullptr;
 uint8_t *frame = nullptr;
+uint8_t *result = nullptr;
+
 size_t bytes_used = 0;
+size_t rgb_bytes = 0;
+
 uint32_t width = 800;
 uint32_t height = 600;
-std::vector<uint8_t> rgbBuffer(width * height * 3);
+// std::vector<uint8_t> rgbBuffer(width * height * 3);
 
-
-// ************ Encoder ************************************************
-// Convert XRGB8888 → RGB (drop X channel)
-void XRGB8888toRGB(const uint8_t* src, uint8_t* dst, int width, int height)
-{
-    int srcStride = width * 4;  // 4 bytes per pixel (XRGB)
-    int dstStride = width * 3;  // 3 bytes per pixel (RGB)
-
-    for (int y = 0; y < height; y++) {
-        const uint8_t* s = src + y * srcStride;
-        uint8_t* d = dst + y * dstStride;
-        for (int x = 0; x < width; x++) {
-            d[0] = s[1]; // R
-            d[1] = s[2]; // G
-            d[2] = s[3]; // B
-            s += 4;
-            d += 3;
-        }
-    }
-}
-// ************ Encoder ************************************************
 
 // ************ Gstreamer ************************************************
 static gboolean push_frame(gpointer data) {
@@ -86,15 +69,17 @@ static gboolean push_frame(gpointer data) {
     GstMapInfo map;
 
     if (!frame) return TRUE;
-    
-    // XRGB8888toRGB(frame, rgbBuffer.data(), width, height);
-    // buffer = gst_buffer_new_allocate(NULL, rgbBuffer.size(), NULL);
-    // gst_buffer_map(buffer, &map, GST_MAP_WRITE);
-    // memcpy(map.data, rgbBuffer.data(), rgbBuffer.size());
-    
-    buffer = gst_buffer_new_allocate(NULL, bytes_used, NULL);
+
+    // XRGB -> RGB
+    int nth = 4;
+    std::size_t j = 0;
+    for (std::size_t i = 0; i < bytes_used; ++i) {
+        if ((i+1) % nth != 0) {result[j] = frame[i]; ++j;}
+    }
+
+    buffer = gst_buffer_new_allocate(NULL, rgb_bytes, NULL);
     gst_buffer_map(buffer, &map, GST_MAP_WRITE);
-    memcpy(map.data, frame, bytes_used);
+    memcpy(map.data, result, rgb_bytes);
     
     gst_buffer_unmap(buffer, &map);
     GST_BUFFER_PTS(buffer) = timestamp;
@@ -126,6 +111,7 @@ static void requestComplete(Request *request)
     
     		Span<uint8_t> data = image->data(i);
     		bytes_used = std::min<unsigned int>(bytesused, data.size());
+            rgb_bytes = bytes_used / 4 * 3;
     
     		if (bytesused > data.size())
     			std::cerr << "payload size " << bytesused
@@ -136,19 +122,15 @@ static void requestComplete(Request *request)
                 frame = (uint8_t*)malloc(bytes_used);
             }
             memcpy(frame, data.data(), bytes_used);
+            if (!result) {
+                result = (uint8_t*)malloc(rgb_bytes);
+            }
+            
         }
     }
     // Reuse and requeue request for next capture
     request->reuse(Request::ReuseBuffers);
     g_camera->queueRequest(request);
-}
-
-// SIGINT handler to stop gracefully
-static void sigint_handler(int)
-{
-    g_running = false;
-    if (g_appsrc)
-        gst_app_src_end_of_stream(GST_APP_SRC(g_appsrc));
 }
 
 int main(int argc, char *argv[])
@@ -161,10 +143,6 @@ int main(int argc, char *argv[])
     const char *dest_ip = argv[1];
     int dest_port = atoi(argv[2]);
     // ***************** Arguments ********************************************
-
-
-    // Setup SIGINT
-    // std::signal(SIGINT, sigint_handler);
 
     // ***************** Camera ***********************************************
     g_camManager = std::make_unique<CameraManager>();
@@ -243,14 +221,7 @@ int main(int argc, char *argv[])
     // Save negotiated size (in case driver chose different)
     width = streamCfg.size.width;
     height = streamCfg.size.height;
-    // std::cout << "Using camera size: " << width << "x" << height << " format XRGB8888\n";
     std::cout << "Default viewfinder configuration is: " << streamCfg.toString() << std::endl;
-
-    // (Optional) Update caps on appsrc if camera changed resolution/format
-    // GstCaps *caps = gst_caps_from_string(
-    //     ("video/x-raw,format=XRGB,width=" + std::to_string(width) + ",height=" + std::to_string(height) + ",framerate=30/1").c_str());
-    // gst_app_src_set_caps(GST_APP_SRC(g_appsrc), caps);
-    // gst_caps_unref(caps);
 
     // Allocate buffers
     FrameBufferAllocator allocator(g_camera);
@@ -311,7 +282,7 @@ int main(int argc, char *argv[])
     char pipeline_desc[1024];
     std::snprintf(pipeline_desc, sizeof(pipeline_desc),
         "appsrc name=mysrc is-live=true block=true format=TIME "
-        "caps=video/x-raw,format=BGRx,width=800,height=600,framerate=30/1 "
+        "caps=video/x-raw,format=BGR,width=800,height=600,framerate=30/1 "
         "! videoconvert "
         "! video/x-raw,format=I420 "
         "! x264enc tune=zerolatency speed-preset=ultrafast "
@@ -354,6 +325,13 @@ int main(int argc, char *argv[])
     // free allocator buffers
     for (auto &cfg : *config)
         allocator.free(cfg.stream());
+
+    if (frame) {
+        free(frame);
+    }
+    if (result) {
+        free(result);
+    }
 
     g_camera->release();
     g_camManager->stop();
